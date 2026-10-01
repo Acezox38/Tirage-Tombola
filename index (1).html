@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tombola</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+:root{--bg:#e8eef2;--ink:#14213d;--paper:#fff;--teal:#0f6b6b;--sun:#f2c14e;--mute:#5b6b80;--line:#c5d0da}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.5 "Bricolage Grotesque",system-ui,sans-serif}
+main{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:clamp(2rem,7vw,3.2rem);font-weight:800;margin:8px 0 20px;letter-spacing:-.02em}
+nav{display:flex;flex-wrap:wrap;gap:6px}
+nav button{font:600 .95rem inherit;font-family:inherit;border:0;padding:10px 14px;border-radius:10px 10px 0 0;background:#d3dde5;color:var(--ink);cursor:pointer}
+nav button[aria-selected=true]{background:var(--paper)}
+.card{background:var(--paper);padding:20px;border-radius:0 12px 12px 12px}
+form{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+input,select{font:inherit;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;min-width:0}
+input{flex:1 1 160px}
+button.go{font:600 1rem inherit;font-family:inherit;background:var(--teal);color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--sun);outline-offset:2px}
+ul{list-style:none;margin:0;padding:0}
+li.t{display:flex;align-items:center;gap:12px;padding:10px 12px 10px 0;border-bottom:1px dashed var(--line)}
+li.t b{flex:0 0 44px;text-align:center;border-right:2px dashed var(--line);color:var(--teal);font-weight:800}
+li.t span{flex:1;overflow-wrap:anywhere}
+li.t button{border:0;background:none;color:#b3261e;cursor:pointer;font:inherit}
+.vide,.msg{color:var(--mute)}
+.msg{min-height:1.5em;margin:8px 0 0}
+.msg.err{color:#b3261e}
+section.admin{margin-top:28px;background:var(--ink);color:#fff;border-radius:12px;padding:20px}
+section.admin h2{margin:0 0 12px;font-size:1.2rem}
+section.admin .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+section.admin input{flex:1 1 160px}
+section.admin button.go{background:var(--sun);color:var(--ink)}
+.gagnants li{padding:8px 0;border-bottom:1px dashed #3b4a6b}
+.gagnants small{color:#aab6cc}
+.hist{margin-top:16px}
+h3{font-size:1rem;margin:16px 0 4px}
+</style>
+</head>
+<body>
+<main>
+<h1>Tombola</h1>
+<nav id="tabs" role="tablist" aria-label="Entreprises"></nav>
+<div class="card">
+  <form id="f">
+    <input id="nom" placeholder="Nom du participant" maxlength="80" required aria-label="Nom du participant">
+    <input id="code" placeholder="Code de l'entreprise" maxlength="30" autocomplete="off" required aria-label="Code d'accès de l'entreprise" style="flex:0 1 170px">
+    <button class="go" type="submit">Ajouter</button>
+  </form>
+  <div id="msg" class="msg" role="status"></div>
+  <ul id="liste"></ul>
+</div>
+
+<section class="admin">
+  <h2>Espace organisateur</h2>
+  <div id="login" class="row">
+    <input id="email" type="email" placeholder="Email" autocomplete="username" aria-label="Email">
+    <input id="mdp" type="password" placeholder="Mot de passe" autocomplete="current-password" aria-label="Mot de passe">
+    <button class="go" id="btnLogin">Se connecter</button>
+  </div>
+  <p id="lmsg" class="msg" role="status"></p>
+  <div id="panel" hidden>
+    <div class="row">
+      <select id="ent" aria-label="Entreprise du tirage"></select>
+      <input id="nb" type="number" min="1" value="1" style="flex:0 0 90px" aria-label="Nombre de gagnants">
+      <button class="go" id="btnTirage">Tirer au sort</button>
+      <button id="btnLogout" class="go" style="background:#fff">Se déconnecter</button>
+    </div>
+    <p id="amsg" class="msg"></p>
+    <ul id="gagnants" class="gagnants"></ul>
+    <div class="hist"><h3>Codes d'accès des entreprises</h3><ul id="codes" class="gagnants"></ul></div>
+    <div class="hist"><h3>Tirages précédents</h3><ul id="hist" class="gagnants"></ul></div>
+  </div>
+</section>
+</main>
+
+<script>
+// 1. Remplace ces deux valeurs (Supabase > Project Settings > API)
+const SUPABASE_URL = "https://VOTRE-PROJET.supabase.co";
+const SUPABASE_ANON_KEY = "VOTRE_CLE_ANON_PUBLIQUE";
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = s => document.querySelector(s);
+let ents = [], cur = null, admin = false;
+const codes = {};
+
+function el(tag, props = {}, ...kids) {
+  const n = Object.assign(document.createElement(tag), props);
+  kids.forEach(k => n.append(k));
+  return n;
+}
+function say(node, text, err) { node.textContent = text || ""; node.classList.toggle("err", !!err); }
+
+function renderTabs() {
+  const nav = $("#tabs"); nav.replaceChildren();
+  ents.forEach(e => {
+    const b = el("button", { textContent: e.nom, role: "tab" });
+    b.setAttribute("aria-selected", e.id === cur);
+    b.onclick = () => { cur = e.id; renderTabs(); load(); };
+    nav.append(b);
+  });
+  const sel = $("#ent"); sel.replaceChildren(el("option", { value: "", textContent: "Toutes les entreprises" }));
+  ents.forEach(e => sel.append(el("option", { value: e.id, textContent: e.nom })));
+}
+
+async function load() {
+  $("#code").value = codes[cur] || "";
+  const ul = $("#liste"); ul.replaceChildren();
+  const { data, error } = await db.from("participants").select("id,nom").eq("entreprise_id", cur).order("created_at");
+  if (error) return say($("#msg"), error.message, true);
+  if (!data.length) ul.append(el("li", { className: "vide", textContent: "Aucun participant pour l'instant. Ajoutez le premier ci-dessus." }));
+  data.forEach((p, i) => {
+    const li = el("li", { className: "t" }, el("b", { textContent: i + 1 }), el("span", { textContent: p.nom }));
+    if (admin) {
+      const x = el("button", { textContent: "Supprimer", ariaLabel: "Supprimer " + p.nom });
+      x.onclick = async () => { await db.from("participants").delete().eq("id", p.id); load(); };
+      li.append(x);
+    }
+    ul.append(li);
+  });
+}
+
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  const nom = $("#nom").value.trim();
+  if (!nom) return;
+  const code = $("#code").value.trim();
+  const { error } = await db.rpc("ajouter_participant", { p_entreprise: cur, p_code: code, p_nom: nom });
+  if (error) return say($("#msg"), error.message, true);
+  codes[cur] = code;
+  $("#nom").value = ""; say($("#msg"), nom + " ajouté."); load();
+};
+
+async function setSession(s) {
+  admin = false;
+  if (s) { const { data } = await db.rpc("est_admin"); admin = data === true; }
+  $("#login").hidden = admin; $("#panel").hidden = !admin;
+  if (admin) { histo(); listeCodes(); }
+  if (cur) load();
+}
+
+$("#btnLogin").onclick = async () => {
+  const { error } = await db.auth.signInWithPassword({ email: $("#email").value, password: $("#mdp").value });
+  say($("#lmsg"), error ? "Connexion refusée : vérifiez l'email et le mot de passe." : "", true);
+};
+$("#btnLogout").onclick = () => db.auth.signOut();
+
+function ligne(r) {
+  const e = ents.find(x => x.id === r.entreprise_id);
+  return el("li", {}, `${r.rang}. ${r.nom} `, el("small", { textContent: e ? "(" + e.nom + ")" : "" }));
+}
+
+$("#btnTirage").onclick = async () => {
+  const nb = +$("#nb").value, ent = $("#ent").value;
+  const cible = ent ? ents.find(x => x.id == ent).nom : "toutes les entreprises";
+  if (!confirm(`Tirer ${nb} gagnant(s) parmi ${cible} ?`)) return;
+  const { data, error } = await db.rpc("tirer_au_sort", { p_nb: nb, p_entreprise: ent ? +ent : null });
+  const ul = $("#gagnants"); ul.replaceChildren();
+  if (error) return say($("#amsg"), error.message, true);
+  if (!data.length) return say($("#amsg"), "Aucun participant éligible.", true);
+  say($("#amsg"), "Gagnants :"); data.forEach(r => ul.append(ligne(r))); histo();
+};
+
+async function listeCodes() {
+  const { data } = await db.from("codes_entreprises").select("entreprise_id,code").order("entreprise_id");
+  const ul = $("#codes"); ul.replaceChildren();
+  (data || []).forEach(c => {
+    const e = ents.find(x => x.id === c.entreprise_id);
+    ul.append(el("li", {}, (e ? e.nom : c.entreprise_id) + " : ", el("b", { textContent: c.code })));
+  });
+}
+
+async function histo() {
+  const { data } = await db.from("resultats").select("*").order("tirage_le", { ascending: false }).order("rang");
+  const ul = $("#hist"); ul.replaceChildren();
+  (data || []).forEach(r => ul.append(ligne(r)));
+}
+
+(async () => {
+  const { data } = await db.from("entreprises").select().order("id");
+  ents = data || []; cur = ents[0]?.id; renderTabs();
+  db.auth.onAuthStateChange((_, s) => setSession(s));
+  const { data: { session } } = await db.auth.getSession(); await setSession(session);
+  load();
+})();
+</script>
+</body>
+</html>
